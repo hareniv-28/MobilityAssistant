@@ -29,5 +29,14 @@
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         android:layout_marginTop="12dp"
-        android:layout_marginStart="12dp"/>
+        android:layout_marginStart="12dp" />
+
+    <com.hareni.mobilityassistant.DetectionOverlay
+        android:id="@+id/overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"/>
+
+
+
+
 </androidx.constraintlayout.widget.ConstraintLayout>
