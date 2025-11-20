@@ -1,132 +1,172 @@
 package com.hareni.mobilityassistant
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.*
+import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.speech.tts.TextToSpeech
 import android.util.Log
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
+import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.core.Preview
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageProxy
+import androidx.core.content.ContextCompat
 import com.hareni.mobilityassistant.databinding.ActivityMainBinding
+import org.tensorflow.lite.Interpreter
+import org.tensorflow.lite.support.image.TensorImage
+import org.tensorflow.lite.support.common.FileUtil
+import org.tensorflow.lite.task.vision.detector.ObjectDetector
+import java.io.ByteArrayOutputStream
+import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.ImageFormat
-import android.graphics.Rect
-import org.tensorflow.lite.Interpreter
-import org.tensorflow.lite.support.common.FileUtil
-import org.tensorflow.lite.support.image.TensorImage
-import org.tensorflow.lite.support.tensorbuffer.TensorBuffer
-import java.io.ByteArrayOutputStream
-
 
 class MainActivity : AppCompatActivity() {
 
-    // ---------- Model & overlay references ----------
-    private lateinit var overlay: com.hareni.mobilityassistant.DetectionOverlay
-    private lateinit var tflite: org.tensorflow.lite.Interpreter
-    private lateinit var labels: List<String>
-
-    // Executor for analysis (single background thread)
-    private val analysisExecutor: java.util.concurrent.ExecutorService = java.util.concurrent.Executors.newSingleThreadExecutor()
-
-
-
+    // ---------- View + model ----------
     private lateinit var binding: ActivityMainBinding
+    private lateinit var objectDetector: ObjectDetector
     private lateinit var cameraExecutor: ExecutorService
 
-    // simple FPS state
-    private var lastFrameTsMs: Long = 0L
-    private var fpsAvg: Double = 0.0
-    private var framesSeen: Int = 0
+    // ---------- Day7 alert fields ----------
+    private var lastAlertTime = 0L
+    private val alertCooldownMs = 1500L
+    private lateinit var vibrator: Vibrator
+    private lateinit var tts: TextToSpeech
 
-    private val requestPermission =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted) startCamera() else binding.previewView.alpha = 0.3f
-        }
+    // ---------- Day8 context/tracking ----------
+    private var previousDetections: List<com.hareni.mobilityassistant.DetectionResult> = emptyList()
+    private var previousFrameTs: Long = 0L
+    private val PERSON_REAL_HEIGHT_M = 1.7f
+    private val BICYCLE_REAL_HEIGHT_M = 1.1f
+    private val MOTORCYCLE_REAL_HEIGHT_M = 1.2f
+    private var focalLengthPx = 0f
+
+    // ---------- Misc state for fps / analyzer ----------
+    private var isAnalyzing = false
+    private var lastFrameTsMs = 0L
+    private var framesSeen = 0
+    private var fpsAvg = 0.0
+
+    // Permission launcher (simple)
+    private val requestPermission = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) startCamera() else Log.w("MobilityAssistant", "Camera permission denied")
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-        // ---- hook overlay from XML ----
-        overlay = findViewById(R.id.overlay)
 
-    // ---- load labels and model (assets) ----
-        try {
-            labels = loadLabels() // loads labelmap.txt from assets, if present
-        } catch (e: Exception) {
-            labels = emptyList()
-            android.util.Log.w("MobilityAssistant", "Labels not loaded: ${e.message}")
+        // init services
+        vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+
+        tts = TextToSpeech(this) { status: Int ->
+            if (status == TextToSpeech.SUCCESS) {
+                tts.language = Locale.ENGLISH
+            } else {
+                Log.w("MobilityAssistant", "TTS init failed: status=$status")
+            }
         }
 
-        try {
-            tflite = loadModel() // loads detect.tflite from assets
-        } catch (e: Exception) {
-            android.util.Log.e("MobilityAssistant", "Model load failed: ${e.message}", e)
-        }
-        // one background thread for analysis
+        // init detector (Day 5)
+        initDetector()
+
+        // create executor for analysis
         cameraExecutor = Executors.newSingleThreadExecutor()
 
+        // request permission & start camera
         checkPermissionAndLaunch()
     }
 
-    private fun checkPermissionAndLaunch() {
-        val granted = ContextCompat.checkSelfPermission(
-            this, Manifest.permission.CAMERA
-        ) == PackageManager.PERMISSION_GRANTED
+    // ---------- Day 5: TaskLib ObjectDetector init ----------
+    private fun initDetector() {
+        try {
+            val options = ObjectDetector.ObjectDetectorOptions.builder()
+                .setMaxResults(5)
+                .setScoreThreshold(0.35f)
+                .build()
+            objectDetector = ObjectDetector.createFromFileAndOptions(this, "detect.tflite", options)
+            Log.i("MobilityAssistant", "ObjectDetector initialized")
+        } catch (e: Exception) {
+            Log.e("MobilityAssistant", "initDetector failed: ${e.message}", e)
+        }
+    }
 
+    private fun checkPermissionAndLaunch() {
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         if (granted) startCamera() else requestPermission.launch(Manifest.permission.CAMERA)
     }
 
+    // ---------- Day 6: CameraX start + analyzer (uses cameraExecutor) ----------
     private fun startCamera() {
         val providerFuture = ProcessCameraProvider.getInstance(this)
         providerFuture.addListener({
             val provider = providerFuture.get()
-
             val selector = CameraSelector.DEFAULT_BACK_CAMERA
 
-            // PREVIEW use case (UI)
             val preview = Preview.Builder().build().also {
                 it.setSurfaceProvider(binding.previewView.surfaceProvider)
             }
 
-            // ANALYSIS use case (frames to CPU)
             val analysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                // leave default YUV_420_888; fast for camera
                 .build()
 
-            analysis.setAnalyzer(analysisExecutor) { imageProxy ->
-                // offload work to background thread executor (analysisExecutor ensures it)
-                try {
-                    // Convert frame -> Bitmap
-                    val bitmap = imageProxyToBitmap(imageProxy)
+            analysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                if (isAnalyzing) {
+                    imageProxy.close()
+                    return@setAnalyzer
+                }
+                isAnalyzing = true
 
-                    // Run detection only if model is loaded
-                    if (::tflite.isInitialized) {
-                        // run inference and get overlay-ready results
-                        val results = runObjectDetection(bitmap)
-                        // post results to UI
-                        runOnUiThread {
-                            overlay.setResults(results)
-                        }
+                try {
+                    // timing info (Day6 helper)
+                    val now = SystemClock.uptimeMillis()
+                    if (lastFrameTsMs != 0L) {
+                        val dt = now - lastFrameTsMs
+                        val fps = if (dt > 0) 1000.0 / dt else 0.0
+                        framesSeen++
+                        fpsAvg += (fps - fpsAvg) / framesSeen.coerceAtLeast(1)
+                        val info = "FPS: ${fpsAvg.roundToInt()} • ${imageProxy.width}x${imageProxy.height} • rot=${imageProxy.imageInfo.rotationDegrees}°"
+                        runOnUiThread { binding.tvDebug.text = info }
+                    } else {
+                        runOnUiThread { binding.tvDebug.text = "Analyzing…" }
+                    }
+                    lastFrameTsMs = now
+
+                    // 1) Convert to bitmap + orient
+                    val bitmap = imageProxyToBitmap(imageProxy)
+                    val rotation = imageProxy.imageInfo.rotationDegrees
+                    val oriented = if (rotation != 0) rotateBitmap(bitmap, rotation) else bitmap
+
+                    // 2) Resize for speed
+                    val shortSide = 320
+                    val inputBitmap = scaleBitmapToShortSide(oriented, shortSide)
+
+                    // 3) Run detection + map results
+                    val overlayResults = processImageForDetection(inputBitmap)
+
+                    // 4) Post to UI
+                    runOnUiThread {
+                        binding.overlay.setResults(overlayResults)
+                        binding.tvDebug.text = "Detections: ${overlayResults.size}"
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("MobilityAssistant", "Analyzer error: ${e.message}", e)
+                    Log.e("MobilityAssistant", "Analyzer error: ${e.message}", e)
                 } finally {
-                    imageProxy.close() // IMPORTANT: always close or CameraX will stop delivering frames
+                    isAnalyzing = false
+                    imageProxy.close()
                 }
             }
-
 
             try {
                 provider.unbindAll()
@@ -137,42 +177,7 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun onFrame(image: ImageProxy) {
-        // TIMING → FPS
-        val now = SystemClock.uptimeMillis()
-        if (lastFrameTsMs != 0L) {
-            val dt = now - lastFrameTsMs // ms between frames
-            val fps = if (dt > 0) 1000.0 / dt else 0.0
-            // running average to smooth display
-            framesSeen++
-            fpsAvg += (fps - fpsAvg) / framesSeen.coerceAtLeast(1)
-            val info = "FPS: ${fpsAvg.roundToInt()}  •  ${image.width}x${image.height}  •  rot=${image.imageInfo.rotationDegrees}°"
-            runOnUiThread { binding.tvDebug.text = info }
-        } else {
-            runOnUiThread { binding.tvDebug.text = "Analyzing…" }
-        }
-        lastFrameTsMs = now
-
-        // IMPORTANT: always close the image to allow the next one
-        image.close()
-    }
-
-    // ---------- Model and labels loaders ----------
-    private fun loadModel(): org.tensorflow.lite.Interpreter {
-        // uses FileUtil to memory-map the .tflite in assets (efficient)
-        val modelBuffer = org.tensorflow.lite.support.common.FileUtil.loadMappedFile(this, "detect.tflite")
-        val options = org.tensorflow.lite.Interpreter.Options()
-        return org.tensorflow.lite.Interpreter(modelBuffer, options)
-    }
-
-    private fun loadLabels(): List<String> {
-        // attempts to read a labelmap.txt in assets (one label per line)
-        return org.tensorflow.lite.support.common.FileUtil.loadLabels(this, "labelmap.txt")
-    }
-
-
-
-    // ------------------- Helper: convert ImageProxy -> Bitmap -------------------
+    // ---------- Day 6: image converter ----------
     private fun imageProxyToBitmap(imageProxy: ImageProxy): Bitmap {
         val yBuffer = imageProxy.planes[0].buffer
         val uBuffer = imageProxy.planes[1].buffer
@@ -194,33 +199,264 @@ class MainActivity : AppCompatActivity() {
         return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
     }
 
-    // ------------------- Helper: run object detection (stub / safe) -------------------
-    /**
-     * Temporary safe implementation.
-     * Returns an empty list so overlay won't crash while we wire the real model parsing.
-     * We'll replace this with proper TFLite parsing or Task Library detection next.
-     */
-    // ---------- Detection run (simple, Task-Lite raw parsing) ----------
-    private fun runObjectDetection(bitmap: Bitmap): List<com.hareni.mobilityassistant.DetectionResult> {
-        // resize model input (common SSD-MobileNet expects 300x300)
-        val inputSize = 300
-        val resized = Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
-        val tensorImage = org.tensorflow.lite.support.image.TensorImage.fromBitmap(resized)
-
-        // NOTE: exact output tensor shape depends on model. This is a safe placeholder path
-        // because Task Library parsing is more robust. For now we will show a placeholder box
-        // so overlay pipeline can be tested. Later we'll parse real output from your chosen model.
-        val w = overlay.width.takeIf { it > 0 } ?: binding.previewView.width
-        val h = overlay.height.takeIf { it > 0 } ?: binding.previewView.height
-
-        // temporary: produce no boxes if model not usable; later we will parse real outputs
-        return emptyList()
+    // ---------- Day 6 helpers ----------
+    private fun rotateBitmap(src: Bitmap, angle: Int): Bitmap {
+        if (angle == 0) return src
+        val matrix = Matrix().apply { postRotate(angle.toFloat()) }
+        return Bitmap.createBitmap(src, 0, 0, src.width, src.height, matrix, true)
     }
 
+    private fun scaleBitmapToShortSide(bitmap: Bitmap, shortSide: Int): Bitmap {
+        val w = bitmap.width
+        val h = bitmap.height
+        val minSide = kotlin.math.min(w, h)
+        if (minSide == shortSide) return bitmap
+        val scale = shortSide.toFloat() / minSide.toFloat()
+        val nw = (w * scale).toInt().coerceAtLeast(1)
+        val nh = (h * scale).toInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(bitmap, nw, nh, true)
+    }
 
+    private fun mapRectFromImageToView(
+        rect: RectF,
+        imageWidth: Int,
+        imageHeight: Int,
+        viewWidth: Int,
+        viewHeight: Int
+    ): RectF {
+        if (viewWidth == 0 || viewHeight == 0) return rect
+        val scale = kotlin.math.min(viewWidth.toFloat() / imageWidth.toFloat(), viewHeight.toFloat() / imageHeight.toFloat())
+        val dispW = imageWidth * scale
+        val dispH = imageHeight * scale
+        val offsetX = (viewWidth - dispW) / 2f
+        val offsetY = (viewHeight - dispH) / 2f
+        return RectF(
+            rect.left * scale + offsetX,
+            rect.top * scale + offsetY,
+            rect.right * scale + offsetX,
+            rect.bottom * scale + offsetY
+        )
+    }
+
+    // ---------- Day 6: detection pipeline (TaskLib) ----------
+    private fun processImageForDetection(inputBitmap: Bitmap): List<com.hareni.mobilityassistant.DetectionResult> {
+        val tensorImage = TensorImage.fromBitmap(inputBitmap)
+
+        val results = try {
+            if (::objectDetector.isInitialized) objectDetector.detect(tensorImage) else emptyList()
+        } catch (e: Exception) {
+            Log.e("MobilityAssistant", "Detection failed: ${e.message}", e)
+            emptyList()
+        }
+
+        val overlayResults = mutableListOf<com.hareni.mobilityassistant.DetectionResult>()
+        for (r in results) {
+            val cats = r.categories
+            if (cats.isEmpty()) continue
+            val label = cats[0].label ?: continue
+            val score = cats[0].score
+            val lower = label.lowercase()
+            if (lower !in listOf("person", "bicycle", "motorcycle")) continue
+
+            val box = r.boundingBox // in inputBitmap coordinates (RectF)
+            val mapped = mapRectFromImageToView(
+                box,
+                inputBitmap.width, inputBitmap.height,
+                binding.previewView.width, binding.previewView.height
+            )
+            overlayResults.add(com.hareni.mobilityassistant.DetectionResult(mapped, label, score))
+        }
+
+        // Day 7: handle alerts (calls Day 8)
+        if (overlayResults.isNotEmpty()) {
+            analyzeContext(overlayResults, inputBitmap.width, inputBitmap.height)
+        }
+
+        return overlayResults
+    }
+
+    // ---------- Day 8: context data classes ----------
+    private data class ContextInfo(
+        val label: String,
+        val score: Float,
+        val box: RectF,
+        val centerX: Float,
+        val centerY: Float,
+        val areaFrac: Float
+    )
+
+    private data class ItemCtx(
+        val info: ContextInfo,
+        val bucket: String,
+        val distanceM: Float,
+        val approaching: Boolean
+    )
+
+    private fun toContextInfo(
+        d: com.hareni.mobilityassistant.DetectionResult,
+        inputWidth: Int,
+        inputHeight: Int
+    ): ContextInfo {
+        val b = d.rect
+        val centerX = (b.left + b.right) / 2f
+        val centerY = (b.top + b.bottom) / 2f
+        val area = (b.right - b.left) * (b.bottom - b.top)
+        val areaFrac = area / (inputWidth.toFloat() * inputHeight.toFloat()).coerceAtLeast(1f)
+        return ContextInfo(d.label.lowercase(), d.score, b, centerX, centerY, areaFrac)
+    }
+
+    private fun horizontalBucket(centerX: Float, inputWidth: Int): String {
+        val nx = centerX / inputWidth.toFloat()
+        return when {
+            nx < 0.33f -> "left"
+            nx > 0.66f -> "right"
+            else -> "center"
+        }
+    }
+
+    private fun estimateDistanceMeters(label: String, boxHeightPx: Float, inputHeightPx: Int): Float {
+        if (boxHeightPx <= 0f) return Float.POSITIVE_INFINITY
+
+        val realHeight = when {
+            "person" in label -> PERSON_REAL_HEIGHT_M
+            "bicycle" in label -> BICYCLE_REAL_HEIGHT_M
+            "motorcycle" in label -> MOTORCYCLE_REAL_HEIGHT_M
+            else -> PERSON_REAL_HEIGHT_M
+        }
+
+        if (focalLengthPx > 0f) {
+            return (realHeight * focalLengthPx) / boxHeightPx
+        }
+
+        val frac = (boxHeightPx / inputHeightPx.toFloat()).coerceAtLeast(0.01f)
+        val scaleFactor = 1.8f
+        return scaleFactor / frac
+    }
+
+    private fun matchDetections(
+        prev: List<ContextInfo>,
+        curr: List<ContextInfo>
+    ): List<Pair<ContextInfo, ContextInfo?>> {
+        val matches = mutableListOf<Pair<ContextInfo, ContextInfo?>>()
+        for (c in curr) {
+            var best: ContextInfo? = null
+            var bestDist = Float.MAX_VALUE
+            for (p in prev) {
+                if (p.label != c.label) continue
+                val dx = p.centerX - c.centerX
+                val dy = p.centerY - c.centerY
+                val dist = dx * dx + dy * dy
+                if (dist < bestDist) {
+                    bestDist = dist
+                    best = p
+                }
+            }
+            matches.add(Pair(c, best))
+        }
+        return matches
+    }
+
+    private fun analyzeContext(
+        overlayResults: List<com.hareni.mobilityassistant.DetectionResult>,
+        inputWidth: Int,
+        inputHeight: Int
+    ) {
+        val now = System.currentTimeMillis()
+
+        val curr = overlayResults.map { toContextInfo(it, inputWidth, inputHeight) }
+        val prev = previousDetections.map { toContextInfo(it, inputWidth, inputHeight) }
+
+        val matches = matchDetections(prev, curr)
+
+        val items = mutableListOf<ItemCtx>()
+
+        for ((currInfo, prevInfo) in matches) {
+            val boxHeightPx = currInfo.box.height()
+            val dist = estimateDistanceMeters(currInfo.label, boxHeightPx, inputHeight)
+
+            val bucket = when {
+                dist < 4f -> "near"
+                dist < 10f -> "medium"
+                else -> "far"
+            }
+
+            val approaching = if (prevInfo != null) {
+                val prevArea = prevInfo.box.width() * prevInfo.box.height()
+                val currArea = currInfo.box.width() * currInfo.box.height()
+                val areaIncrease = (currArea - prevArea) / prevArea.coerceAtLeast(1f)
+                areaIncrease > 0.10f
+            } else false
+
+            items.add(ItemCtx(currInfo, bucket, dist, approaching))
+        }
+
+        previousDetections = overlayResults
+        previousFrameTs = now
+
+        if (items.isNotEmpty()) handleContextAlert(items)
+    }
+
+    private fun handleContextAlert(items: List<ItemCtx>) {
+        val prioritized = items.sortedWith(compareBy({ it.distanceM }, { if (it.approaching) 0 else 1 }))
+        val top = prioritized.firstOrNull() ?: return
+
+        val label = top.info.label
+        val distBucket = top.bucket
+        val approaching = top.approaching
+        val horiz = horizontalBucket(top.info.centerX, binding.previewView.width)
+
+        when {
+            approaching && distBucket == "near" -> {
+                vibrateStrong()
+                speak("${label.replaceFirstChar { it.uppercase() }} approaching ahead.")
+            }
+            distBucket == "near" -> {
+                vibrateStrong()
+                speak("${label.replaceFirstChar { it.uppercase() }} nearby ahead.")
+            }
+            distBucket == "medium" -> {
+                vibrateLight()
+                speak("${label.replaceFirstChar { it.uppercase() }} ahead on your $horiz.")
+            }
+            else -> {
+                if (top.info.areaFrac > 0.02f) {
+                    vibrateLight()
+                    speak("${label.replaceFirstChar { it.uppercase() }} ahead on your $horiz.")
+                }
+            }
+        }
+    }
+
+    // ---------- Day 7: vibration + tts helpers ----------
+    private fun vibrateStrong() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(300)
+        }
+    }
+
+    private fun vibrateLight() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createOneShot(120, VibrationEffect.DEFAULT_AMPLITUDE / 2))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(120)
+        }
+    }
+
+    private fun speak(text: String) {
+        if (::tts.isInitialized) {
+            tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+        } else {
+            Log.w("MobilityAssistant", "TTS not initialized")
+        }
+    }
 
     override fun onDestroy() {
         super.onDestroy()
         if (::cameraExecutor.isInitialized) cameraExecutor.shutdown()
+        if (::tts.isInitialized) tts.shutdown()
     }
 }
