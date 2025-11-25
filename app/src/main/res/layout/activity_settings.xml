@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:padding="16dp"
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <TextView
+        android:layout_width="172dp"
+        android:layout_height="34dp"
+        android:text="Detection score threshold" />
+
+    <SeekBar
+        android:id="@+id/seekThreshold"
+        android:layout_width="match_parent"
+        android:layout_height="41dp"
+        android:max="90" />
+
+    <TextView
+        android:layout_width="189dp"
+        android:layout_height="35dp"
+        android:layout_marginTop="12dp"
+        android:text="Distance scale (calibration)" />
+
+    <SeekBar
+        android:id="@+id/seekDistanceScale"
+        android:layout_width="match_parent"
+        android:layout_height="38dp"
+        android:max="200" />
+
+    <TextView
+        android:layout_width="146dp"
+        android:layout_height="34dp"
+        android:layout_marginTop="12dp"
+        android:text="Vibration strength" />
+
+    <SeekBar
+        android:id="@+id/seekVibrate"
+        android:layout_width="match_parent"
+        android:layout_height="34dp"
+        android:max="100" />
+
+    <Button
+        android:id="@+id/btnSave"
+        android:layout_width="match_parent"
+        android:layout_height="59dp"
+        android:layout_marginTop="20dp"
+        android:text="Save" />
+</LinearLayout>

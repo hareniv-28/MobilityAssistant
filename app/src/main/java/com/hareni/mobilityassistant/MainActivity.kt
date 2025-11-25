@@ -2,8 +2,16 @@ package com.hareni.mobilityassistant
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.*
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
+import android.graphics.Matrix
+import android.graphics.Rect
+import android.graphics.RectF
+import android.media.AudioAttributes
+import android.media.SoundPool
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
@@ -11,14 +19,14 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.speech.tts.TextToSpeech
 import android.util.Log
+import android.widget.Button
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import com.hareni.mobilityassistant.databinding.ActivityMainBinding
-import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.support.image.TensorImage
-import org.tensorflow.lite.support.common.FileUtil
 import org.tensorflow.lite.task.vision.detector.ObjectDetector
 import java.io.ByteArrayOutputStream
 import java.util.Locale
@@ -39,6 +47,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var vibrator: Vibrator
     private lateinit var tts: TextToSpeech
 
+    // ---------- Day9 SoundPool ----------
+    private lateinit var soundPool: SoundPool
+    private var beepSoundId: Int = 0
+
     // ---------- Day8 context/tracking ----------
     private var previousDetections: List<com.hareni.mobilityassistant.DetectionResult> = emptyList()
     private var previousFrameTs: Long = 0L
@@ -53,9 +65,15 @@ class MainActivity : AppCompatActivity() {
     private var framesSeen = 0
     private var fpsAvg = 0.0
 
-    // Permission launcher (simple)
+    // accessibility toggle
+    private var assistEnabled = true
+
+    // SharedPrefs keys
+    private val PREFS = "mobility_prefs"
+
+    // Permission launcher
     private val requestPermission = registerForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+        ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) startCamera() else Log.w("MobilityAssistant", "Camera permission denied")
     }
@@ -66,9 +84,10 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // init services
+        // init vibrator
         vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
 
+        // init TTS
         tts = TextToSpeech(this) { status: Int ->
             if (status == TextToSpeech.SUCCESS) {
                 tts.language = Locale.ENGLISH
@@ -77,25 +96,87 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // init detector (Day 5)
+        // init soundpool (Day9)
+        initSoundPool()
+
+        // initialize TaskLib detector (Day5) using prefs (Day10)
         initDetector()
 
         // create executor for analysis
         cameraExecutor = Executors.newSingleThreadExecutor()
 
+        // UI wiring - big assist button (Day12)
+        setupAssistButton()
+
         // request permission & start camera
         checkPermissionAndLaunch()
     }
 
-    // ---------- Day 5: TaskLib ObjectDetector init ----------
+    override fun onResume() {
+        super.onResume()
+        // If settings may have changed, re-init detector with updated prefs
+        // (lightweight — reinit only if threshold changed in settings)
+        // For simplicity we'll re-init every resume (safe for now)
+        try {
+            initDetector()
+        } catch (e: Exception) {
+            Log.w("MobilityAssistant", "Re-init detector failed: ${e.message}")
+        }
+    }
+
+    // ------------- Initialization helpers ----------------
+
+    private fun initSoundPool() {
+        try {
+            val attrs = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+
+            soundPool = SoundPool.Builder()
+                .setAudioAttributes(attrs)
+                .setMaxStreams(2)
+                .build()
+
+            // Attempt to load beep_short from res/raw/beep_short.mp3
+            beepSoundId = try {
+                resources.getIdentifier("beep_short", "raw", packageName).takeIf { it != 0 }?.let {
+                    soundPool.load(this, it, 1)
+                } ?: 0
+            } catch (e: Exception) {
+                Log.w("MobilityAssistant", "Beep load failed: ${e.message}")
+                0
+            }
+        } catch (e: Exception) {
+            Log.w("MobilityAssistant", "SoundPool init failed: ${e.message}")
+            beepSoundId = 0
+        }
+    }
+
+    private fun setupAssistButton() {
+        // Make sure binding has btnAssistBig (Day12)
+        try {
+            binding.btnAssistBig.setOnClickListener {
+                assistEnabled = !assistEnabled
+                binding.btnAssistBig.text = if (assistEnabled) "Assist ON" else "Assist OFF"
+            }
+        } catch (e: Exception) {
+            // ignore if layout not present
+            Log.i("MobilityAssistant", "Assist button not found in layout")
+        }
+    }
+
     private fun initDetector() {
         try {
+            val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val scoreThreshold = prefs.getFloat("scoreThreshold", 0.35f)
+
             val options = ObjectDetector.ObjectDetectorOptions.builder()
                 .setMaxResults(5)
-                .setScoreThreshold(0.35f)
+                .setScoreThreshold(scoreThreshold)
                 .build()
             objectDetector = ObjectDetector.createFromFileAndOptions(this, "detect.tflite", options)
-            Log.i("MobilityAssistant", "ObjectDetector initialized")
+            Log.i("MobilityAssistant", "ObjectDetector initialized (scoreThreshold=$scoreThreshold)")
         } catch (e: Exception) {
             Log.e("MobilityAssistant", "initDetector failed: ${e.message}", e)
         }
@@ -106,7 +187,8 @@ class MainActivity : AppCompatActivity() {
         if (granted) startCamera() else requestPermission.launch(Manifest.permission.CAMERA)
     }
 
-    // ---------- Day 6: CameraX start + analyzer (uses cameraExecutor) ----------
+    // ------------- CameraX / Analyzer (Day6 + Day5 integration) --------------
+
     private fun startCamera() {
         val providerFuture = ProcessCameraProvider.getInstance(this)
         providerFuture.addListener({
@@ -129,7 +211,7 @@ class MainActivity : AppCompatActivity() {
                 isAnalyzing = true
 
                 try {
-                    // timing info (Day6 helper)
+                    // timing info (FPS)
                     val now = SystemClock.uptimeMillis()
                     if (lastFrameTsMs != 0L) {
                         val dt = now - lastFrameTsMs
@@ -177,7 +259,8 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    // ---------- Day 6: image converter ----------
+    // ------------- Image conversion helpers --------------
+
     private fun imageProxyToBitmap(imageProxy: ImageProxy): Bitmap {
         val yBuffer = imageProxy.planes[0].buffer
         val uBuffer = imageProxy.planes[1].buffer
@@ -199,7 +282,6 @@ class MainActivity : AppCompatActivity() {
         return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
     }
 
-    // ---------- Day 6 helpers ----------
     private fun rotateBitmap(src: Bitmap, angle: Int): Bitmap {
         if (angle == 0) return src
         val matrix = Matrix().apply { postRotate(angle.toFloat()) }
@@ -238,7 +320,8 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    // ---------- Day 6: detection pipeline (TaskLib) ----------
+    // ------------- Detection pipeline (Day6) --------------
+
     private fun processImageForDetection(inputBitmap: Bitmap): List<com.hareni.mobilityassistant.DetectionResult> {
         val tensorImage = TensorImage.fromBitmap(inputBitmap)
 
@@ -267,7 +350,7 @@ class MainActivity : AppCompatActivity() {
             overlayResults.add(com.hareni.mobilityassistant.DetectionResult(mapped, label, score))
         }
 
-        // Day 7: handle alerts (calls Day 8)
+        // Day 7: alerts (uses Day8 context)
         if (overlayResults.isNotEmpty()) {
             analyzeContext(overlayResults, inputBitmap.width, inputBitmap.height)
         }
@@ -275,7 +358,8 @@ class MainActivity : AppCompatActivity() {
         return overlayResults
     }
 
-    // ---------- Day 8: context data classes ----------
+    // ------------- Day8 context helpers & data classes --------------
+
     private data class ContextInfo(
         val label: String,
         val score: Float,
@@ -297,6 +381,7 @@ class MainActivity : AppCompatActivity() {
         inputWidth: Int,
         inputHeight: Int
     ): ContextInfo {
+        // DetectionResult has property `rect` (your class). We copy it into ContextInfo.box
         val b = d.rect
         val centerX = (b.left + b.right) / 2f
         val centerY = (b.top + b.bottom) / 2f
@@ -396,7 +481,11 @@ class MainActivity : AppCompatActivity() {
         if (items.isNotEmpty()) handleContextAlert(items)
     }
 
+    // ------------- Day8/9: context -> alert mapping (with directional beep) --------------
+
     private fun handleContextAlert(items: List<ItemCtx>) {
+        if (!assistEnabled) return
+
         val prioritized = items.sortedWith(compareBy({ it.distanceM }, { if (it.approaching) 0 else 1 }))
         val top = prioritized.firstOrNull() ?: return
 
@@ -407,56 +496,117 @@ class MainActivity : AppCompatActivity() {
 
         when {
             approaching && distBucket == "near" -> {
-                vibrateStrong()
-                speak("${label.replaceFirstChar { it.uppercase() }} approaching ahead.")
+                vibratePattern(label)
+                playDirectionalBeep(horiz)
+                speak("${label.replaceFirstChar { it.uppercase() }} approaching ahead. Take care.")
             }
             distBucket == "near" -> {
-                vibrateStrong()
+                vibratePattern(label)
+                playDirectionalBeep(horiz)
                 speak("${label.replaceFirstChar { it.uppercase() }} nearby ahead.")
             }
             distBucket == "medium" -> {
-                vibrateLight()
+                vibratePattern(label)
+                playDirectionalBeep(horiz)
                 speak("${label.replaceFirstChar { it.uppercase() }} ahead on your $horiz.")
             }
             else -> {
                 if (top.info.areaFrac > 0.02f) {
-                    vibrateLight()
+                    vibratePattern(label)
+                    playDirectionalBeep(horiz)
                     speak("${label.replaceFirstChar { it.uppercase() }} ahead on your $horiz.")
                 }
             }
         }
     }
 
-    // ---------- Day 7: vibration + tts helpers ----------
-    private fun vibrateStrong() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE))
-        } else {
-            @Suppress("DEPRECATION")
-            vibrator.vibrate(300)
+    // ------------- Day9: directional beep helper --------------
+
+    private fun playDirectionalBeep(direction: String) {
+        // direction = "left" | "center" | "right"
+        if (beepSoundId == 0) {
+            // fallback: short TTS ping (silence or beep depending on TTS)
+            if (::tts.isInitialized) {
+                // speak a short tone-like word (quiet)
+                tts.speak("", TextToSpeech.QUEUE_FLUSH, null, "beep")
+            }
+            return
+        }
+        val (leftVolume, rightVolume) = when (direction) {
+            "left" -> Pair(1.0f, 0.2f)
+            "right" -> Pair(0.2f, 1.0f)
+            else -> Pair(0.85f, 0.85f)
+        }
+        try {
+            soundPool.play(beepSoundId, leftVolume, rightVolume, 1, 0, 1.0f)
+        } catch (e: Exception) {
+            Log.w("MobilityAssistant", "playDirectionalBeep failed: ${e.message}")
         }
     }
 
-    private fun vibrateLight() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vibrator.vibrate(VibrationEffect.createOneShot(120, VibrationEffect.DEFAULT_AMPLITUDE / 2))
-        } else {
-            @Suppress("DEPRECATION")
-            vibrator.vibrate(120)
+    // ------------- Day12: haptic patterns (replace earlier vibrate helpers) --------------
+
+    private fun vibratePattern(type: String) {
+        if (!::vibrator.isInitialized) return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val pattern = when (type) {
+                    "person" -> longArrayOf(0, 100, 80, 100) // double short pulses
+                    "motorcycle" -> longArrayOf(0, 300) // long vibration
+                    "bicycle" -> longArrayOf(0, 120) // short
+                    else -> longArrayOf(0, 80)
+                }
+                vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(150)
+            }
+        } catch (e: Exception) {
+            Log.w("MobilityAssistant", "vibratePattern failed: ${e.message}")
         }
     }
 
-    private fun speak(text: String) {
-        if (::tts.isInitialized) {
-            tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
-        } else {
-            Log.w("MobilityAssistant", "TTS not initialized")
+    // ------------- TTS helper --------------
+
+    private fun speak(text: String, urgent: Boolean = true) {
+        if (!::tts.isInitialized) return
+        try {
+            val queueMode = if (urgent) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
+            tts.speak(text, queueMode, null, null)
+        } catch (e: Exception) {
+            Log.w("MobilityAssistant", "TTS speak failed: ${e.message}")
         }
     }
+
+    // ------------- MobilityService control (Day11) --------------
+
+    private fun startMobilityService() {
+        try {
+            val intent = Intent(this, MobilityService::class.java)
+            ContextCompat.startForegroundService(this, intent)
+        } catch (e: Exception) {
+            Log.w("MobilityAssistant", "startMobilityService failed: ${e.message}")
+        }
+    }
+
+    private fun stopMobilityService() {
+        try {
+            stopService(Intent(this, MobilityService::class.java))
+        } catch (e: Exception) {
+            Log.w("MobilityAssistant", "stopMobilityService failed: ${e.message}")
+        }
+    }
+
+    // ------------- Lifecycle cleanup --------------
 
     override fun onDestroy() {
         super.onDestroy()
         if (::cameraExecutor.isInitialized) cameraExecutor.shutdown()
         if (::tts.isInitialized) tts.shutdown()
+        try {
+            if (::soundPool.isInitialized) soundPool.release()
+        } catch (e: Exception) {
+            // ignore
+        }
     }
 }

@@ -23,6 +23,7 @@ android {
     }
 
 
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -39,6 +40,7 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
+
 }
 
 dependencies {
@@ -51,6 +53,7 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     val camerax = "1.4.0"
+    //noinspection GradleDependency
     implementation("androidx.camera:camera-core:$camerax")
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
@@ -62,6 +65,12 @@ dependencies {
     implementation("org.tensorflow:tensorflow-lite-gpu:2.12.0")
     implementation("org.tensorflow:tensorflow-lite:2.14.0")
     implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+
+    implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.4")
+
+    implementation("androidx.lifecycle:lifecycle-service:2.6.1")
+    // gives LifecycleService
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.1")
 
 
 

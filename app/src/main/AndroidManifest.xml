@@ -1,37 +1,52 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    package="com.hareni.mobilityassistant">
 
-    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Basic permissions -->
     <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.VIBRATE"/>
+    <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- Newer Android (14/15) permission used for camera foreground services -->
+    <!-- Declaring this removes the lint error about FOREGROUND_SERVICE_CAMERA -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" tools:ignore="ProtectedPermissions" />
+    <!-- Optional hardware features -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
-    <uses-feature android:name="android.hardware.camera.any" />
-
-
-
-
-
     <application
         android:allowBackup="true"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.MobilityAssistant">
+
+        <!-- Main launcher activity -->
         <activity
             android:name=".MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-    </application>
 
+        <!-- Settings (if present) -->
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false" />
+
+        <!-- Your foreground service: explicitly declare the camera type -->
+        <service
+            android:name=".MobilityService"
+            android:exported="false"
+            android:foregroundServiceType="camera" />
+        <!-- remove CameraX internal service to avoid lint/merge warnings -->
+        <service
+            android:name="androidx.camera.core.impl.MetadataHolderService"
+            tools:node="remove"
+            tools:ignore="Instantiatable" />
+    </application>
 </manifest>
