@@ -1,49 +1,142 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:padding="16dp"
-    android:orientation="vertical"
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/settings_root"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:padding="16dp">
+
+    <!-- Score threshold -->
+    <TextView
+        android:id="@+id/labelScore"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="Score threshold"
+        android:textSize="14sp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintEnd_toStartOf="@+id/tvScoreValue" />
 
     <TextView
-        android:layout_width="172dp"
-        android:layout_height="34dp"
-        android:text="Detection score threshold" />
+        android:id="@+id/tvScoreValue"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="0.35"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="@id/labelScore" />
 
     <SeekBar
-        android:id="@+id/seekThreshold"
-        android:layout_width="match_parent"
-        android:layout_height="41dp"
-        android:max="90" />
+        android:id="@+id/seekScore"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:max="100"
+        app:layout_constraintTop_toBottomOf="@id/labelScore"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- Distance scale -->
+    <TextView
+        android:id="@+id/labelDistance"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="Distance scale"
+        android:textSize="14sp"
+        app:layout_constraintTop_toBottomOf="@id/seekScore"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toStartOf="@+id/tvDistanceValue"
+        android:layout_marginTop="12dp"/>
 
     <TextView
-        android:layout_width="189dp"
-        android:layout_height="35dp"
+        android:id="@+id/tvDistanceValue"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="1.00"
+        app:layout_constraintTop_toTopOf="@id/labelDistance"
+        app:layout_constraintEnd_toEndOf="parent"/>
+
+    <SeekBar
+        android:id="@+id/seekDistance"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:max="200"
+        app:layout_constraintTop_toBottomOf="@id/labelDistance"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- Vibration strength -->
+    <TextView
+        android:id="@+id/labelVibration"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="Vibration strength"
+        android:textSize="14sp"
+        app:layout_constraintTop_toBottomOf="@id/seekDistance"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toStartOf="@+id/tvVibrationValue"
+        android:layout_marginTop="12dp"/>
+
+    <TextView
+        android:id="@+id/tvVibrationValue"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="150"
+        app:layout_constraintTop_toTopOf="@id/labelVibration"
+        app:layout_constraintEnd_toEndOf="parent"/>
+
+    <SeekBar
+        android:id="@+id/seekVibration"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:max="255"
+        app:layout_constraintTop_toBottomOf="@id/labelVibration"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- Audio mode spinner -->
+    <TextView
+        android:id="@+id/labelAudioMode"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Audio mode"
         android:layout_marginTop="12dp"
-        android:text="Distance scale (calibration)" />
+        app:layout_constraintTop_toBottomOf="@id/seekVibration"
+        app:layout_constraintStart_toStartOf="parent"/>
 
-    <SeekBar
-        android:id="@+id/seekDistanceScale"
-        android:layout_width="match_parent"
-        android:layout_height="38dp"
-        android:max="200" />
+    <Spinner
+        android:id="@+id/spinnerAudioMode"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        app:layout_constraintTop_toTopOf="@id/labelAudioMode"
+        app:layout_constraintEnd_toEndOf="parent"/>
 
-    <TextView
-        android:layout_width="146dp"
-        android:layout_height="34dp"
-        android:layout_marginTop="12dp"
-        android:text="Vibration strength" />
+    <!-- Buttons -->
+    <LinearLayout
+        android:id="@+id/buttonRow"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="end"
+        app:layout_constraintTop_toBottomOf="@id/spinnerAudioMode"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        android:layout_marginTop="20dp">
 
-    <SeekBar
-        android:id="@+id/seekVibrate"
-        android:layout_width="match_parent"
-        android:layout_height="34dp"
-        android:max="100" />
+        <Button
+            android:id="@+id/btnResetDefaults"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Reset defaults"/>
 
-    <Button
-        android:id="@+id/btnSave"
-        android:layout_width="match_parent"
-        android:layout_height="59dp"
-        android:layout_marginTop="20dp"
-        android:text="Save" />
-</LinearLayout>
+        <Space
+            android:layout_width="12dp"
+            android:layout_height="wrap_content" />
+
+        <Button
+            android:id="@+id/btnSave"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Save"/>
+    </LinearLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

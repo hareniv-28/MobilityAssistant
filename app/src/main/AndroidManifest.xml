@@ -7,9 +7,6 @@
     <!-- Basic permissions -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.VIBRATE" />
-
-    <!-- Newer Android (14/15) permission used for camera foreground services -->
-    <!-- Declaring this removes the lint error about FOREGROUND_SERVICE_CAMERA -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" tools:ignore="ProtectedPermissions" />
     <!-- Optional hardware features -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
