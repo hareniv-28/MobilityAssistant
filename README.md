@@ -26,14 +26,6 @@ It gives **audio and haptic feedback**, runs **offline**, and stays active **eve
 | Camera | CameraX |
 | UI | ViewBinding |
 | Feedback | Text-to-Speech + Haptics |
-
----
-
-## 🏗️ Current Progress
-✅ App structure, CameraX integration, and permissions done  
-🚧 Model integration in progress (TensorFlow Lite setup)  
-🎯 Next: object detection overlay + audio/haptic responses
-
 ---
 
 ## 🚀 How to Run
