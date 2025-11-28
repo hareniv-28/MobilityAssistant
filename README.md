@@ -1,4 +1,7 @@
-# 🚶‍♀️ Mobility Assistant
+# Mobility Assistant
+## 📲 Download APK  
+➡️ [Click here to download the Mobility Assistant APK](https://github.com/<username>/<repo>/releases/tag/v1.0-milestone)
+
 
 **Mobility Assistant** is an Android app that uses on-device AI to detect nearby **people, bicycles, and vehicles**, helping visually impaired users navigate safely.  
 It gives **audio and haptic feedback**, runs **offline**, and stays active **even with the screen off**.
